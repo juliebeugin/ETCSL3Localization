@@ -1,0 +1,1190 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE nta PUBLIC '-//Uppaal Team//DTD Flat System 1.1//EN' 'http://www.it.uu.se/research/group/darts/uppaal/flat-1_2.dtd'>
+<nta>
+	<declaration>
+//version for Open Journal of ITS paper, improvement of v74 (used in IFAC CTS 2021 paper), automatisation of results using Python scripts
+
+
+// ********** variables to be able to generalize to several trains later **********
+const int nbrTrain = 2;
+typedef int TrainId;
+// ********************************************************************************
+
+
+// ***************** channels *******************
+broadcast chan NextTimeStep;
+broadcast chan PB_Detected[nbrTrain]; // Physical balise detected
+broadcast chan VB_Detected[nbrTrain]; // Virtual balise detected
+
+broadcast chan go[nbrTrain];
+broadcast chan NewVBDynAcc[nbrTrain]; // Related to GNSS-related error bound generation (VB dynamic accuracy)
+
+broadcast chan ValidVBDynAcc[nbrTrain];
+broadcast chan NonValidVBDynAcc[nbrTrain];
+
+
+// *********************  unit to avoid 'double'  *********************
+// **** double cannot influence the model logic (they are skipped) ****
+// distance: in cm
+// time step: 0.1 second
+// velocity: in m/s = 10cm/0.1s
+// acceleration: in m/s²= cm/0.1s
+
+
+// ************* for big values *****************
+const int INT32_MIN     = -2147483648;
+const int INT32_MAX     =  2147483647;
+typedef int[INT32_MIN, INT32_MAX] int32_t;
+//***********************************************
+
+int32_t P_ref[nbrTrain] = {0,0};
+int32_t P_int[nbrTrain] = {0,0}; // position (travelled distance), unit: cm
+
+int V_int[nbrTrain] = {50*10,50*10}; // velocity, with time unit: 0.1s =&gt; V unit: 10cm/0.1s =&gt; V = 50 m/s = 500 cm/0.1s (180 km/h)
+const int V_max[nbrTrain] = {100*10,100*10};
+
+int A[nbrTrain] = {0,0}; // Acceleration, unit: 1m/s² 
+
+//hybrid clocks only used in location invariant (they do not have to influence the model logic, they are only used in ODE expressions, used in our model for test)
+hybrid clock V_dyn[nbrTrain] = {500.0,500.0};// dynamic speed
+hybrid clock P_dyn[nbrTrain] = {0.0,0.0};// dynamic position (dynamic travelled distance)
+
+int V_target[nbrTrain] = {50*10,50*10}; //  target velocity
+
+int32_t PositionError[nbrTrain] = {0,0};// maximum position error
+int32_t maxFront[nbrTrain] = {0,0};
+int32_t minFront[nbrTrain] = {0,0};
+
+// Dynamic odo error 
+hybrid clock OdoError_dyn = 0.0;// do not have to influence the model logic (uppaal restriction)
+
+int BaliseError[nbrTrain] = {0,0};// PB or VB maximum error
+
+// VB dynamic accuracy = Protection Level that bound GNSS-related errors
+int VBDynAcc[nbrTrain] = {0,0};
+
+// *********** time declarations ************
+clock C_freq = 0.0;
+int freq = 1; //time unit = 0.1s
+
+// To represent time in second in graphs
+hybrid clock AbsTime = 0.0 ;
+
+// continuous clock
+clock AllTime  = 0.0 ;
+
+
+
+int32_t Headway_int = 0;
+int32_t BrakeDist[nbrTrain]= {0,0};
+
+
+// *************************************************************************
+// *******************  Physical / Virtual Balise config ******************* 
+
+/*  
+  // Case 1 PB 2 VB
+  const int global_test_case_id = 2; // VB number between PB
+  const int PBnbr = 120; // PB number
+*/
+
+/* 
+  // Case 1 PB 3 VB (1km-2km)
+  const int global_test_case_id = 3; // VB number between PB
+  const int PBnbr = 90; // PB number
+*/
+ 
+/*
+  // Case 1 PB 4 VB (1km-2km)
+  const int global_test_case_id = 4; // VB number between PB
+  const int PBnbr = 72; // PB number
+*/
+
+/*
+  // Case 1 PB 5 VB (1km-2km)
+  const int global_test_case_id = 5; // VB number between PB
+  const int PBnbr = 60; // PB number
+*/
+
+/*
+  // Case 1 PB 6 VB (1km-2km)
+  const int global_test_case_id = 6; // VB number between PB
+  const int PBnbr = 52; // PB number
+*/
+
+/*
+  // Case 1 PB 7 VB (1km-2km)
+  const int global_test_case_id = 7; // VB number between PB
+  const int PBnbr = 45; // PB number
+*/
+
+/*
+  // Case 1 PB 8 VB (1km-2km)
+  const int global_test_case_id = 8; // VB number between PB
+  const int PBnbr = 40; // PB number
+*/
+
+/*
+  // Case 1 PB 9 VB (1km-2km)
+  const int global_test_case_id = 9; // VB number between PB
+  const int PBnbr = 36; // PB number
+*/
+
+/*
+  // Case 1 PB 1 VB (1km-2km)
+  const int global_test_case_id = 1; // VB number between PB
+  const int PBnbr = 180; // PB number
+*/
+
+  // Case 1 PB 2 VB // ************ Active test cases ************
+  const int global_test_case_id = 2;// VB number between PB
+  const int PBnbr = 120; // PB number
+
+
+// Test case classes (distance between balises)
+  const int VBdist = 1*1000*100; // distance between VB (km:m:cm) 
+
+// Test case common part (balise at regular intervals) 
+  const int VBnbr = global_test_case_id *PBnbr;// VB number
+  const int PBdist = (global_test_case_id +1)*VBdist; // distance between PB (km:m:cm)  
+
+  int32_t  PBLocation[PBnbr]; // Array of PB locations, initialized in InitAllBalises module
+  int32_t  VBLocation[VBnbr]; // Array of VB locations, initialized in InitAllBalises module
+  // Location of the 1st balise in InitAllBalises module</declaration>
+	<template>
+		<name x="5" y="5">TrainMove</name>
+		<parameter>const TrainId id</parameter>
+		<declaration>// ****************************************************************************************************************************************************************************
+// **********************  Module to represent the train dynamics, i.e. the position (travelled distance) is calculated according to the train velocity  **********************
+// - we represent the cancellation of the acceleration automatically in the sense of the physical limitations: V=0, V=V_max (not possible to accelerate more even if we want to)
+// - it is necessary to introduce the transitions between states according to the explicit instructions of acceleration and braking taking into account a target speed which can be different from V_max and V=0
+// - make sure to be able to define a scenario by varying the speed according to the different sections of the rail
+// - be careful to well adapt the model to force the transition
+
+
+bool Accelerate, Brake;
+int n_V[nbrTrain] = {2,2}; 
+
+// ********** calculation of the position, velocity, and acceleration using integers (P_int, Vint) **********
+// acceptable approximation and it allows avoiding doubles that generate model-checking problems
+// continuous values (P_dyn, V_dyn) are keeped for model verification
+
+void ComputeP() // position
+{
+	P_int[id] = P_int[id] + V_int[id];// the travelled distance is the preceding travelled distance plus one distance step d, d = v*time_step
+}
+
+
+void ComputeV() // velocity
+{
+    if(A[id] != 0)
+    {
+		V_int[id] = V_int[id] + n_V[id] * A[id];
+
+		if(n_V[id] == 2)// to alternate: either 0, or 2
+         { 
+            n_V[id] = 0; 
+         } 
+		else { n_V[id] = 2;}
+    }
+}
+
+
+void ComputeA() // acceleration
+{
+	if (V_int[id] &lt; V_target[id])
+    {
+        // it is necessary to accelerate 
+		if (V_int[id] + 2 &lt;= V_target[id])
+        {
+            // +2 due to V_int // condition in order to not exceed
+			Accelerate = true; 
+			Brake = false;
+			A[id] = 1;
+        }	
+		else
+        {
+             Accelerate = false;
+			A[id] = 0;
+			V_int[id] = V_target[id];
+			V_dyn[id] = V_target[id]; 
+             n_V[id] = 2; 
+         }
+    }
+	
+    if (V_int[id] &gt; V_target[id])
+    {
+        // it is necessary to brake
+        if (V_int[id] - 2 &gt;= V_target[id])
+        {
+            // -2 due to V_int // condition in order to not exceed
+            Brake = true;
+            Accelerate = false;
+            A[id] = -1;
+        }
+        else
+        {
+            Brake = false;
+            A[id] = 0; 
+            V_int[id] = V_target[id];
+            V_dyn[id] = V_target[id]; 
+            n_V[id] = 2; 
+        }
+    }
+
+    if (V_int[id] ==  V_target[id])
+    {
+        Accelerate = false;
+        Brake = false;
+        A[id] = 0; 
+        V_dyn[id] = V_target[id]; 
+        n_V[id] = 2; 
+    }
+}  // principle: whether it is possible to brake or accelerate without exceeding V_target; else V = V_target ; we adapt the dynamic value</declaration>
+		<location id="id0" x="144" y="119">
+			<name x="25" y="127">AcceleratingTrain</name>
+			<label kind="invariant" x="0" y="144">C_freq&lt;=freq &amp;&amp;
+V_dyn[id]' == A[id] &amp;&amp;
+P_dyn[id]' == V_dyn[id]</label>
+		</location>
+		<location id="id1" x="484" y="119">
+			<name x="374" y="119">ConstantSpeed</name>
+			<label kind="invariant" x="493" y="136">C_freq&lt;=freq &amp;&amp;
+V_dyn[id]' == A[id] &amp;&amp;
+P_dyn[id]' == V_dyn[id]</label>
+		</location>
+		<location id="id2" x="850" y="119">
+			<name x="858" y="127">BrakingTrain</name>
+			<label kind="invariant" x="858" y="144">C_freq&lt;=freq &amp;&amp;
+V_dyn[id]' == A[id] &amp;&amp;
+P_dyn[id]' == V_dyn[id]</label>
+		</location>
+		<location id="id3" x="484" y="272">
+			<name x="442" y="289">Model_initialization</name>
+			<urgent/>
+		</location>
+		<init ref="id3"/>
+		<transition>
+			<source ref="id1"/>
+			<target ref="id0"/>
+			<label kind="guard" x="263" y="102">Accelerate</label>
+			<label kind="synchronisation" x="246" y="85">NextTimeStep?</label>
+			<label kind="assignment" x="255" y="119">ComputeA(),
+ComputeP(),
+ComputeV()</label>
+		</transition>
+		<transition>
+			<source ref="id1"/>
+			<target ref="id2"/>
+			<label kind="guard" x="680" y="102">Brake</label>
+			<label kind="synchronisation" x="646" y="85">NextTimeStep?</label>
+			<label kind="assignment" x="663" y="119">ComputeA(),
+ComputeP(),
+ComputeV()</label>
+		</transition>
+		<transition>
+			<source ref="id3"/>
+			<target ref="id1"/>
+			<label kind="guard" x="416" y="212">A[id] == 0</label>
+			<label kind="assignment" x="493" y="204">Accelerate = false,
+Brake = false</label>
+		</transition>
+		<transition>
+			<source ref="id3"/>
+			<target ref="id0"/>
+			<label kind="guard" x="162" y="238">A[id] &gt; 0</label>
+			<label kind="assignment" x="162" y="272">Accelerate = true</label>
+			<nail x="144" y="272"/>
+		</transition>
+		<transition>
+			<source ref="id3"/>
+			<target ref="id2"/>
+			<label kind="guard" x="739" y="246">A[id] &lt; 0</label>
+			<label kind="assignment" x="739" y="272">Brake= true</label>
+			<nail x="850" y="272"/>
+		</transition>
+		<transition>
+			<source ref="id2"/>
+			<target ref="id1"/>
+			<label kind="guard" x="629" y="-42">C_freq==freq &amp;&amp;
+!Brake</label>
+			<label kind="synchronisation" x="637" y="-59">NextTimeStep?</label>
+			<label kind="assignment" x="646" y="0">ComputeP(),
+ComputeV()</label>
+			<nail x="816" y="0"/>
+			<nail x="569" y="0"/>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id1"/>
+			<label kind="guard" x="255" y="-42">C_freq==freq &amp;&amp;
+!Accelerate</label>
+			<label kind="synchronisation" x="255" y="-59">NextTimeStep?</label>
+			<label kind="assignment" x="263" y="0">ComputeP(),
+ComputeV()</label>
+			<nail x="195" y="0"/>
+			<nail x="391" y="0"/>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-17" y="-25">C_freq==freq &amp;&amp; Accelerate</label>
+			<label kind="synchronisation" x="8" y="-42">NextTimeStep?</label>
+			<label kind="assignment" x="17" y="0">ComputeA(),
+ComputeP(),
+ComputeV()</label>
+			<nail x="144" y="0"/>
+			<nail x="-25" y="0"/>
+			<nail x="-25" y="119"/>
+		</transition>
+		<transition>
+			<source ref="id1"/>
+			<target ref="id1"/>
+			<label kind="guard" x="416" y="-42">C_freq==freq &amp;&amp;
+!Brake &amp;&amp; !Accelerate</label>
+			<label kind="synchronisation" x="425" y="-59">NextTimeStep?</label>
+			<label kind="assignment" x="442" y="0">ComputeA(),
+ComputeP()</label>
+			<nail x="416" y="17"/>
+			<nail x="408" y="0"/>
+			<nail x="544" y="0"/>
+			<nail x="535" y="25"/>
+		</transition>
+		<transition>
+			<source ref="id2"/>
+			<target ref="id2"/>
+			<label kind="guard" x="850" y="-25">C_freq==freq &amp;&amp; Brake</label>
+			<label kind="synchronisation" x="867" y="-42">NextTimeStep?</label>
+			<label kind="assignment" x="892" y="0">ComputeA(),
+ComputeP(),
+ComputeV()</label>
+			<nail x="850" y="0"/>
+			<nail x="1003" y="0"/>
+			<nail x="1003" y="119"/>
+		</transition>
+	</template>
+	<template>
+		<name>TrackDescription_A</name>
+		<declaration>// ****************************************************************************************************************
+// ************** Test module to describe speed profiles, i.e. a target speed for each track section **************</declaration>
+		<location id="id4" x="161" y="0">
+		</location>
+		<location id="id5" x="-153" y="0">
+			<label kind="invariant" x="-163" y="17">P_int[0] &lt;= 200000</label>
+			<label kind="exponentialrate" x="-163" y="34">1</label>
+		</location>
+		<location id="id6" x="-433" y="0">
+			<label kind="invariant" x="-443" y="17">P_int[0] &lt;= 70000</label>
+			<label kind="exponentialrate" x="-443" y="34">1</label>
+		</location>
+		<location id="id7" x="-714" y="0">
+			<label kind="invariant" x="-724" y="17">C_freq&lt;=freq</label>
+		</location>
+		<init ref="id7"/>
+		<transition>
+			<source ref="id7"/>
+			<target ref="id6"/>
+			<label kind="guard" x="-654" y="-42">C_freq==freq</label>
+			<label kind="synchronisation" x="-654" y="-59">NextTimeStep?</label>
+			<label kind="assignment" x="-654" y="-25">V_target[0] = 400</label>
+		</transition>
+		<transition>
+			<source ref="id5"/>
+			<target ref="id4"/>
+			<label kind="guard" x="-68" y="-42">P_int[0] &gt;= 190000</label>
+			<label kind="assignment" x="-59" y="-25">V_target[0] = 455</label>
+		</transition>
+		<transition>
+			<source ref="id6"/>
+			<target ref="id5"/>
+			<label kind="guard" x="-374" y="-42">P_int[0] &gt;= 69000</label>
+			<label kind="assignment" x="-365" y="-25">V_target[0] = 600</label>
+		</transition>
+	</template>
+	<template>
+		<name>TimeStep</name>
+		<declaration>// ****************************************************************************************
+// **********************  Module for each time step to be considered **********************</declaration>
+		<location id="id8" x="0" y="0">
+			<label kind="invariant" x="-10" y="17">C_freq&lt;=freq &amp;&amp;
+AbsTime' == 0.1</label>
+		</location>
+		<init ref="id8"/>
+		<transition>
+			<source ref="id8"/>
+			<target ref="id8"/>
+			<label kind="guard" x="8" y="-102">C_freq==freq</label>
+			<label kind="synchronisation" x="8" y="-119">NextTimeStep!</label>
+			<label kind="assignment" x="18" y="-76">C_freq=0</label>
+			<nail x="0" y="-76"/>
+			<nail x="102" y="-76"/>
+			<nail x="102" y="0"/>
+		</transition>
+	</template>
+	<template>
+		<name>InitAllBalises</name>
+		<declaration>// ********************************************************************************************************
+// **********************  Module to initialize the physical/virtual balise location **********************  
+
+
+// PB locations
+void init_PB()
+{
+    int i = 1;
+    PBLocation[0]= VBdist; // first PB location, VBdist between each balise (either PB or VB) 
+    while  (i &lt; PBnbr)
+    {
+        PBLocation[i] = PBLocation[i-1] + PBdist;
+        i++;
+    }
+}
+
+
+// VB locations
+void init_VB(int test_case_id)
+{
+    int i = 1;
+    VBLocation[0]= 2*VBdist; // first VB location (the 1st balise is a PB)
+    if (test_case_id == 2 )// PB-2VB
+    {
+        while (i &lt; VBnbr)
+        {
+             if( (i%2) == 0)
+             {
+                 VBLocation[i] = VBLocation[i-1] + 2*VBdist;
+             }  
+             else
+             {
+                 VBLocation[i] = VBLocation[i-1] + VBdist;
+             }
+             i++;
+        }
+    }
+
+    else if (test_case_id == 3 )// PB-3VB
+    {
+        while  (i &lt; VBnbr)
+        {
+            if( (i%3) == 0) 
+            {
+                VBLocation[i] = VBLocation[i-1] + 2*VBdist;
+            }
+             else 
+            {
+                VBLocation[i] = VBLocation[i-1] + VBdist;
+            }
+            i++;
+        }
+    }
+
+    else if ( test_case_id == 4 )// PB-4VB
+    {
+        while  (i &lt; VBnbr)
+        {
+            if( (i%4) == 0) 
+            {
+                 VBLocation[i] = VBLocation[i-1] + 2*VBdist;
+            }
+            else 
+            {
+                VBLocation[i] = VBLocation[i-1] + VBdist;
+            } 
+            i++;
+        }
+    }
+
+    else if ( test_case_id == 5 )// PB-5VB
+    {
+        while  (i &lt; VBnbr)
+        {
+             if( (i%5) == 0)
+             {
+                 VBLocation[i] = VBLocation[i-1] + 2*VBdist;
+             }
+             else 
+             {
+                 VBLocation[i] = VBLocation[i-1] + VBdist;
+             }
+             i++;
+        }
+    }
+
+    else if ( test_case_id == 6 )// PB-6VB
+    {
+        while  (i &lt; VBnbr)
+        {
+            if( (i%6) == 0)
+            {
+                VBLocation[i] = VBLocation[i-1] + 2*VBdist;
+            } 
+            else 
+            {
+                VBLocation[i] = VBLocation[i-1] + VBdist;
+            }
+            i++;
+        }
+    }
+
+    else if ( test_case_id == 7 )// PB-7VB
+    {
+        while  (i &lt; VBnbr) 
+        {
+            if( (i%7) == 0) 
+            {
+                VBLocation[i] = VBLocation[i-1] + 2*VBdist;
+            }
+            else 
+            {
+                VBLocation[i] = VBLocation[i-1] + VBdist;
+            }
+            i++;
+        }
+    }
+
+    else if ( test_case_id == 8 )// PB-8VB
+    {
+        while  (i &lt; VBnbr)
+        {
+            if( (i%8) == 0)
+            {
+                VBLocation[i] = VBLocation[i-1] + 2*VBdist;
+            }
+            else 
+            {
+                VBLocation[i] = VBLocation[i-1] + VBdist;
+            }
+            i++;
+        }
+    }
+
+    else if ( test_case_id == 9 )// PB-9VB
+    {
+        while  (i &lt; VBnbr)
+        {
+            if( (i%9) == 0) 
+            {
+                VBLocation[i] = VBLocation[i-1] + 2*VBdist;
+            }
+            else 
+            {
+                VBLocation[i] = VBLocation[i-1] + VBdist;
+            } 
+            i++;
+        }
+    }
+
+    else if ( test_case_id == 1 )// PB-VB
+    {
+        while  (i &lt; VBnbr)
+        {
+            VBLocation[i] = VBLocation[i-1] + 2*VBdist; 
+            i++;
+        }
+    }
+}</declaration>
+		<location id="id9" x="280" y="0">
+		</location>
+		<location id="id10" x="0" y="0">
+			<urgent/>
+		</location>
+		<init ref="id10"/>
+		<transition>
+			<source ref="id10"/>
+			<target ref="id9"/>
+			<label kind="assignment" x="18" y="0">init_PB(), init_VB(global_test_case_id)</label>
+		</transition>
+	</template>
+	<template>
+		<name>BTM</name>
+		<parameter>const TrainId id</parameter>
+		<declaration>// **************************************************************************************************
+// **********************  Module to represent the reading of physical balises **********************  
+// **********************  BTM = Balise Transmission Module (ETCS component)  ***********************
+
+
+// Initialisation of physical balise location is realised in 'InitAllBalises' module
+
+
+// 2 trains
+int PBindex[nbrTrain] = {0,0};// index of the expected physical balise
+bool PB_InExpectationWindowStatus[nbrTrain] = {false, false};
+
+// Function that compares the position of the train with the position of the next expected balise and changes the status
+// Due to the discontinuity of the position, the equality is not perfect (interval to be considered)
+void PB_ExpectationWindowStatus()
+{
+    int32_t minPB_Expectation[nbrTrain];
+    int32_t maxPB_Expectation[nbrTrain];
+    minPB_Expectation[id] = PBLocation[PBindex[id]] - V_int[id];// considering a distance step before the balise location (d=v*time_step)
+    maxPB_Expectation[id] = PBLocation[PBindex[id]] + V_int[id];// considering a distance step after the balise location
+    if ((P_int[id] &gt; minPB_Expectation[id] &amp;&amp; P_int[id] &lt; maxPB_Expectation[id])) PB_InExpectationWindowStatus[id] = true; // to be adapted later to consider any interval
+	else PB_InExpectationWindowStatus[id] = false;
+}</declaration>
+		<location id="id11" x="-705" y="-144">
+			<name x="-715" y="-178">Done</name>
+			<urgent/>
+		</location>
+		<location id="id12" x="94" y="-51">
+			<name x="-8" y="-59">PBExpected</name>
+			<urgent/>
+		</location>
+		<location id="id13" x="94" y="-144">
+			<name x="-84" y="-136">ExpectationWindowStatus</name>
+			<urgent/>
+		</location>
+		<location id="id14" x="-229" y="-144">
+			<name x="-306" y="-136">CheckExpectationWindow</name>
+			<urgent/>
+		</location>
+		<location id="id15" x="-474" y="-144">
+			<name x="-459" y="-136">ReadingPosition</name>
+			<label kind="invariant" x="-561" y="-127">C_freq&lt;=freq</label>
+		</location>
+		<location id="id16" x="-705" y="-42">
+		</location>
+		<init ref="id15"/>
+		<transition>
+			<source ref="id16"/>
+			<target ref="id11"/>
+			<label kind="synchronisation" x="-816" y="-102">NextTimeStep?</label>
+			<nail x="-731" y="-59"/>
+			<nail x="-731" y="-119"/>
+		</transition>
+		<transition>
+			<source ref="id11"/>
+			<target ref="id16"/>
+			<label kind="synchronisation" x="-663" y="-102">go[id]!</label>
+			<nail x="-680" y="-119"/>
+			<nail x="-680" y="-59"/>
+		</transition>
+		<transition>
+			<source ref="id15"/>
+			<target ref="id11"/>
+			<label kind="guard" x="-654" y="-170">PBindex[id] == PBnbr</label>
+			<label kind="synchronisation" x="-654" y="-187">NextTimeStep?</label>
+		</transition>
+		<transition>
+			<source ref="id12"/>
+			<target ref="id15"/>
+			<label kind="synchronisation" x="-425" y="-68">PB_Detected[id]!</label>
+			<label kind="assignment" x="-425" y="-51">P_ref[id] = PBLocation[PBindex[id]],
+PBindex[id]++</label>
+			<nail x="94" y="-9"/>
+			<nail x="-467" y="-9"/>
+		</transition>
+		<transition>
+			<source ref="id13"/>
+			<target ref="id12"/>
+			<label kind="guard" x="-136" y="-102">PB_InExpectationWindowStatus[id]</label>
+		</transition>
+		<transition>
+			<source ref="id13"/>
+			<target ref="id15"/>
+			<label kind="guard" x="-450" y="-255">!PB_InExpectationWindowStatus[id]</label>
+			<label kind="synchronisation" x="-450" y="-272">go[id]!</label>
+			<nail x="94" y="-238"/>
+			<nail x="-467" y="-238"/>
+		</transition>
+		<transition>
+			<source ref="id14"/>
+			<target ref="id13"/>
+			<label kind="assignment" x="-178" y="-161">PB_ExpectationWindowStatus()</label>
+		</transition>
+		<transition>
+			<source ref="id15"/>
+			<target ref="id14"/>
+			<label kind="guard" x="-442" y="-170">PBindex[id] &lt; PBnbr</label>
+			<label kind="synchronisation" x="-442" y="-187">NextTimeStep?</label>
+		</transition>
+	</template>
+	<template>
+		<name>VBR</name>
+		<parameter>const TrainId id</parameter>
+		<declaration>// *************************************************************************************************
+// **********************  Module to represent the reading of virtual balises **********************  
+// ********************** VBR = Virtual Balise Reader (new component for ETCS) *********************
+
+
+// Initialisation of physical balise location is realised in 'InitAllBalises' module
+
+
+// 2 trains
+int VBindex[nbrTrain] = {0,0};// index of the expected virtual balise
+bool VB_InExpectationWindowStatus[nbrTrain] = {false, false};
+
+// Function that compares the position of the train with the position of the next expected balise and changes the status
+// Due to the discontinuity of the position, the equality is not perfect (interval to be considered)
+void VB_ExpectationWindowStatus()
+{
+    int32_t minVB_Expectation[nbrTrain];
+    int32_t maxVB_Expectation[nbrTrain];
+    minVB_Expectation[id] = VBLocation[VBindex[id]] - V_int[id];// considering a distance step before the balise location (d=v*time_step)
+    maxVB_Expectation[id] = VBLocation[VBindex[id]] + V_int[id];// considering a distance step after the balise location
+	if ((P_int[id] &gt; minVB_Expectation[id] &amp;&amp; P_int[id] &lt; maxVB_Expectation[id])) VB_InExpectationWindowStatus[id] = true; // to be adapted later to consider any interval
+	else VB_InExpectationWindowStatus[id] = false;
+}</declaration>
+		<location id="id17" x="-164" y="-238">
+			<name x="-197" y="-221">TestValidVBError</name>
+			<urgent/>
+		</location>
+		<location id="id18" x="-510" y="-433">
+			<name x="-486" y="-433">ReadingPosition</name>
+			<label kind="invariant" x="-597" y="-416">C_freq&lt;=freq</label>
+		</location>
+		<location id="id19" x="227" y="-306">
+			<name x="125" y="-314">VBExpected</name>
+			<urgent/>
+		</location>
+		<location id="id20" x="227" y="-433">
+			<name x="49" y="-425">ExpectationWindowStatus</name>
+			<urgent/>
+		</location>
+		<location id="id21" x="-96" y="-433">
+			<name x="-172" y="-416">CheckExpectationWindow</name>
+			<urgent/>
+		</location>
+		<location id="id22" x="-707" y="-331">
+		</location>
+		<location id="id23" x="-707" y="-433">
+			<name x="-717" y="-467">Done</name>
+			<urgent/>
+		</location>
+		<location id="id24" x="6" y="-238">
+			<name x="-36" y="-221">WaitVBErro</name>
+		</location>
+		<init ref="id18"/>
+		<transition>
+			<source ref="id17"/>
+			<target ref="id18"/>
+			<label kind="guard" x="-444" y="-374">VBDynAcc[id] &gt; PositionError[id]</label>
+			<label kind="synchronisation" x="-444" y="-391">NonValidVBDynAcc[id]!</label>
+			<label kind="assignment" x="-444" y="-357">VBindex[id]++</label>
+			<nail x="-240" y="-340"/>
+			<nail x="-478" y="-340"/>
+		</transition>
+		<transition>
+			<source ref="id17"/>
+			<target ref="id18"/>
+			<label kind="guard" x="-478" y="-264">VBDynAcc[id] &lt;= PositionError[id]</label>
+			<label kind="synchronisation" x="-478" y="-281">ValidVBDynAcc[id]!</label>
+			<label kind="assignment" x="-478" y="-238">P_ref[id] = VBLocation[VBindex[id]],
+VBindex[id]++</label>
+			<nail x="-497" y="-238"/>
+		</transition>
+		<transition>
+			<source ref="id24"/>
+			<target ref="id17"/>
+			<label kind="synchronisation" x="-129" y="-264">NewVBDynAcc[id]?</label>
+		</transition>
+		<transition>
+			<source ref="id18"/>
+			<target ref="id23"/>
+			<label kind="guard" x="-673" y="-459">VBindex[id] == VBnbr</label>
+			<label kind="synchronisation" x="-673" y="-476">NextTimeStep?</label>
+		</transition>
+		<transition>
+			<source ref="id19"/>
+			<target ref="id24"/>
+			<label kind="synchronisation" x="66" y="-264">VB_Detected[id]!</label>
+			<nail x="227" y="-238"/>
+		</transition>
+		<transition>
+			<source ref="id20"/>
+			<target ref="id19"/>
+			<label kind="guard" x="-2" y="-374">VB_InExpectationWindowStatus[id]</label>
+		</transition>
+		<transition>
+			<source ref="id20"/>
+			<target ref="id18"/>
+			<label kind="guard" x="-478" y="-561">!VB_InExpectationWindowStatus[id]</label>
+			<label kind="synchronisation" x="-478" y="-578">go[id]!</label>
+			<nail x="227" y="-535"/>
+			<nail x="-503" y="-535"/>
+		</transition>
+		<transition>
+			<source ref="id21"/>
+			<target ref="id20"/>
+			<label kind="assignment" x="-44" y="-450">VB_ExpectationWindowStatus()</label>
+		</transition>
+		<transition>
+			<source ref="id18"/>
+			<target ref="id21"/>
+			<label kind="guard" x="-452" y="-459">VBindex[id] &lt; VBnbr</label>
+			<label kind="synchronisation" x="-452" y="-476">NextTimeStep?</label>
+		</transition>
+		<transition>
+			<source ref="id22"/>
+			<target ref="id23"/>
+			<label kind="synchronisation" x="-792" y="-391">NextTimeStep?</label>
+			<nail x="-733" y="-348"/>
+			<nail x="-733" y="-408"/>
+		</transition>
+		<transition>
+			<source ref="id23"/>
+			<target ref="id22"/>
+			<label kind="synchronisation" x="-673" y="-391">go[id]!</label>
+			<nail x="-682" y="-408"/>
+			<nail x="-682" y="-340"/>
+		</transition>
+	</template>
+	<template>
+		<name>OdoError</name>
+		<parameter>const TrainId id</parameter>
+		<declaration>// **************************************************************************************************************************
+// ********** Module representing i) the evolution and ii) the resetting of the uncertainties on the train position *********
+// ********** For the resetting function, the residual error related to the balise is kept **********************************
+
+
+// In the automaton module, the error bound(uncertainty) is updated when a PB or a VB is encountered = resetting function
+
+
+int32_t Dist = 0; // distance from last balise
+int32_t OdoError_val= 0;//initial 'under/over reading amount'
+int NoBalise = 0;
+
+// function for computing the 'under/over reading amount'
+void ComputeOdoError()
+{
+	Dist = P_int[id] - P_ref[id] ; // travelled distance since P_ref (LRBG)
+    OdoError_val = 0;
+	while(Dist &gt;= 20)// trick for dividing by 20, i.e. this represents the multiplication by 5% = 1/20 (the odometer adds an error of 5% of the travelled distance)
+    {
+		Dist = Dist - 20;
+		OdoError_val++;
+	} 
+}
+
+// Function to compute the 'Global uncertainty on the train position'
+// = balise activation uncertainty + 5% × distance from the last reference position
+void ComputePositionError()
+{
+    PositionError[id] = BaliseError[id] + OdoError_val;// error bounds
+    maxFront[id] = P_int[id] + OdoError_val;
+    minFront[id] = P_int[id] - OdoError_val;
+}</declaration>
+		<location id="id25" x="152" y="0">
+		</location>
+		<location id="id26" x="-425" y="0">
+			<name x="-408" y="-17">idle</name>
+			<label kind="invariant" x="-408" y="8">C_freq&lt;=freq &amp;&amp;
+OdoError_dyn' == 0.05*V_dyn[id]</label>
+		</location>
+		<location id="id27" x="-425" y="153">
+			<urgent/>
+		</location>
+		<location id="id28" x="-26" y="280">
+			<name x="-68" y="238">WaitValidVBDynAcc</name>
+		</location>
+		<init ref="id26"/>
+		<transition>
+			<source ref="id28"/>
+			<target ref="id27"/>
+			<label kind="synchronisation" x="-340" y="212">NonValidVBDynAcc[id]?</label>
+			<nail x="-102" y="238"/>
+			<nail x="-399" y="238"/>
+		</transition>
+		<transition>
+			<source ref="id28"/>
+			<target ref="id27"/>
+			<label kind="synchronisation" x="-340" y="255">ValidVBDynAcc[id]?</label>
+			<label kind="assignment" x="-340" y="280">BaliseError[id] = VBDynAcc[id],
+OdoError_dyn = VBDynAcc[id]</label>
+			<nail x="-425" y="280"/>
+		</transition>
+		<transition>
+			<source ref="id25"/>
+			<target ref="id27"/>
+			<label kind="guard" x="-60" y="314">NoBalise == 1</label>
+			<label kind="synchronisation" x="-43" y="331">go[id]?</label>
+			<nail x="152" y="348"/>
+			<nail x="-425" y="348"/>
+		</transition>
+		<transition>
+			<source ref="id27"/>
+			<target ref="id26"/>
+			<label kind="assignment" x="-416" y="59">ComputeOdoError(),
+ComputePositionError(), 
+NoBalise=0</label>
+		</transition>
+		<transition>
+			<source ref="id25"/>
+			<target ref="id25"/>
+			<label kind="guard" x="34" y="-34">NoBalise == 0</label>
+			<label kind="synchronisation" x="127" y="-42">go[id]?</label>
+			<label kind="assignment" x="59" y="-17">NoBalise++</label>
+			<nail x="136" y="-25"/>
+			<nail x="170" y="-25"/>
+		</transition>
+		<transition>
+			<source ref="id25"/>
+			<target ref="id28"/>
+			<label kind="synchronisation" x="16" y="255">VB_Detected[id]?</label>
+			<nail x="152" y="280"/>
+		</transition>
+		<transition>
+			<source ref="id25"/>
+			<target ref="id27"/>
+			<label kind="synchronisation" x="-60" y="127">PB_Detected[id]?</label>
+			<label kind="assignment" x="-94" y="153">BaliseError[id] = 5*100,
+OdoError_dyn = 5*100</label>
+			<label kind="comments" x="67" y="161">Unit:cm</label>
+			<nail x="152" y="153"/>
+		</transition>
+		<transition>
+			<source ref="id26"/>
+			<target ref="id25"/>
+			<label kind="synchronisation" x="-119" y="-25">NextTimeStep?</label>
+		</transition>
+	</template>
+	<template>
+		<name>Monitor</name>
+		<declaration>// **********************************************************************
+// ********************** To monitor the Max error ********************** 
+
+
+int32_t maxError[nbrTrain] = {0,0};
+
+void MonitorMax()
+{
+    if(PositionError[0] &gt; maxError[0])
+    {
+        maxError[0] = PositionError[0];
+    }
+}</declaration>
+		<location id="id29" x="-204" y="-68">
+			<label kind="invariant" x="-214" y="-51">C_freq&lt;=freq</label>
+		</location>
+		<init ref="id29"/>
+		<transition>
+			<source ref="id29"/>
+			<target ref="id29"/>
+			<label kind="synchronisation" x="-186" y="-187">NextTimeStep?</label>
+			<label kind="assignment" x="-186" y="-170">MonitorMax()</label>
+			<nail x="-204" y="-170"/>
+			<nail x="-8" y="-170"/>
+			<nail x="-8" y="-68"/>
+		</transition>
+	</template>
+	<template>
+		<name>VBDynAccGen</name>
+		<parameter>const TrainId id</parameter>
+		<declaration>// **********************************************************************************************************************************
+// ********************** For generating VB dynamic accuracy = Protection Level that bound GNSS-related errors **********************
+
+int nbrA=0, nbrB=0; // just for analyzing the transition weight
+
+// parameterization of GNSS error bound (protection level) distribution, used when a VB is detected, to be adapted according to research results of the GNSS-based community
+
+
+void ComputeVbDynAcc(int[0,1] OpenSky)// bool Opensky = 0 or 1
+{
+    int PL = 0;
+    if (OpenSky == 1)
+    {
+        PL = fint(random_normal(10*100, 5*100)); 
+        if(PL &gt; 0)
+        {
+            VBDynAcc[id] = PL;
+        }
+        else 
+        {
+            VBDynAcc[id] = 0;
+        }
+    }   
+    else if (OpenSky == 0)
+    {
+        PL = fint(random_normal(30*100, 20*100)); // NonOpenSky ( mean 30 &amp; std 20) 
+        //PL = fint(random_normal(30*100, 10*100)); // NonOpenSky ( mean 30 &amp; std 10) 
+        //PL = fint(random_normal(40*100, 10*100)); // NonOpenSky ( mean 40 &amp; std 10) 
+        if(PL &gt; 0)
+        {
+            VBDynAcc[id] = PL;
+        }
+        else {VBDynAcc[id] = 0;}   
+    }
+
+}
+
+/*
+// PL Value according to environment type 
+//NonOpenSky (30m -+20)
+VBDynAcc[id] = fint(random_normal(30*100, 20*100)),
+
+
+//OpenSky (10m +- 5)
+VBDynAcc[id] = fint(random_normal(10*100, 5*100)),
+
+*/</declaration>
+		<location id="id30" x="-93" y="0">
+			<label kind="invariant" x="-186" y="17">C_freq&lt;=freq</label>
+		</location>
+		<location id="id31" x="365" y="0">
+			<urgent/>
+		</location>
+		<location id="id32" x="136" y="0">
+			<label kind="comments" x="-68" y="-93">50/50 equiprobable distribution
+between OpenSky environement and
+NonOpenSky environement</label>
+			<urgent/>
+		</location>
+		<branchpoint id="id33" x="221" y="0">
+		</branchpoint>
+		<init ref="id30"/>
+		<transition>
+			<source ref="id32"/>
+			<target ref="id33"/>
+		</transition>
+		<transition>
+			<source ref="id31"/>
+			<target ref="id30"/>
+			<label kind="synchronisation" x="383" y="-17">NewVBDynAcc[id]!</label>
+			<nail x="467" y="0"/>
+			<nail x="467" y="136"/>
+			<nail x="-76" y="136"/>
+		</transition>
+		<transition>
+			<source ref="id33"/>
+			<target ref="id31"/>
+			<label kind="assignment" x="221" y="-119">ComputeVbDynAcc(0),
+nbrA++</label>
+			<label kind="probability" x="239" y="-68">1</label>
+			<nail x="221" y="-85"/>
+			<nail x="365" y="-85"/>
+		</transition>
+		<transition>
+			<source ref="id33"/>
+			<target ref="id31"/>
+			<label kind="assignment" x="195" y="85">ComputeVbDynAcc(1),
+nbrB++</label>
+			<label kind="probability" x="229" y="51">0</label>
+			<nail x="221" y="85"/>
+			<nail x="365" y="85"/>
+		</transition>
+		<transition>
+			<source ref="id30"/>
+			<target ref="id32"/>
+			<label kind="synchronisation" x="-59" y="-17">VB_Detected[id]?</label>
+		</transition>
+	</template>
+	<template>
+		<name x="5" y="5">VBDynAccGen2</name>
+		<declaration>// ****************************************************************************************************************
+// ********************** IEEE Access analysis: module generated automatically using Python script ****************
+
+// All previous modules are manually built using the graphical user interface of UPPAAL. In so doing, UPPAAL '.xml' files are obtained.
+// This manual building allows iteratively refining the models, i.e. correcting syntax errors and approaching the more finely as possible the system behavior.
+// Then, queries are used in the verification engine of UPPAAL to verify properties when the models are executed.
+
+// It is possible to generate UPPAAL '.xta' files, instead of '.xml' files, for automatically
+// creating modules supporting all UPPAAL functionalities except the graphical information needed for the vizualization.
+// In that case, models can be exceuted using the 'verify ta' in a command prompt.
+
+// Besides, it is possible to generate UPPAAL '.q' files for automatically managing the queries generation.
+
+// This automation possibility is employed using Python scripts and allows us to observe different system behaviors according to different parameterization of the system.
+// It takes as parameters (examples are given hereunder) :
+//  - the balise configuration (PB-xVB),
+//  - the probabilistic distributions related to different GNSS signal reception environments.
+
+
+const int Mean = 10*100; // in (cm) // Mean of the PL normal distribution
+const int Std = 5*100; // in (cm) // Std of the PL normal distribution
+const int PL_MinLimit = 0*100; // in (cm)
+
+
+double BaliseError; // LRBG PL for odo reset
+
+void ComputeVbDynAcc()
+{
+    int VBDynAcc = 0; //dynamic VB PL
+    VBDynAcc = fint(random_normal(Mean, Std)); // (10;5) || (10;3) || (5;3)
+   
+    if(VBDynAcc &gt; PL_MinLimit)
+    {
+        BaliseError = VBDynAcc;
+    }
+    else
+    {
+        BaliseError = PL_MinLimit;
+    }
+}
+
+
+// For configurations PB-xVB
+
+int BaliseIndex = 0;// incrementation of BaliseIndex with respect to  x (PB-xVB)
+const int VBnbr = 3; // configuration PB-xVB
+const int PBerror = 5*100; // (cm)</declaration>
+		<location id="id34" x="-646" y="-170">
+			<label kind="invariant" x="-714" y="-153">freq &lt;= 1</label>
+		</location>
+		<location id="id35" x="-221" y="-93">
+			<urgent/>
+		</location>
+		<init ref="id34"/>
+		<transition>
+			<source ref="id35"/>
+			<target ref="id34"/>
+			<label kind="guard" x="-629" y="-68">BaliseIndex == VBnbr</label>
+			<label kind="assignment" x="-629" y="-42">BaliseIndex = 0</label>
+			<nail x="-221" y="-42"/>
+			<nail x="-646" y="-42"/>
+		</transition>
+		<transition>
+			<source ref="id35"/>
+			<target ref="id34"/>
+			<label kind="guard" x="-629" y="-119">BaliseIndex &lt; VBnbr</label>
+			<label kind="assignment" x="-628" y="-93">BaliseIndex++</label>
+			<nail x="-646" y="-93"/>
+		</transition>
+		<transition>
+			<source ref="id34"/>
+			<target ref="id34"/>
+			<label kind="guard" x="-908" y="-340">freq == 1 &amp;&amp; BaliseIndex == 0</label>
+			<label kind="assignment" x="-935" y="-306">BaliseIndex = 1, BaliseError = PBerror ,freq = 0</label>
+			<nail x="-646" y="-306"/>
+			<nail x="-952" y="-306"/>
+			<nail x="-952" y="-170"/>
+		</transition>
+		<transition>
+			<source ref="id34"/>
+			<target ref="id35"/>
+			<label kind="guard" x="-620" y="-212">freq == 1 &amp;&amp; BaliseIndex &lt;= VBnbr &amp;&amp; BaliseIndex &gt; 0</label>
+			<label kind="assignment" x="-586" y="-170">ComputeVbDynAcc(), freq = 0</label>
+			<nail x="-221" y="-170"/>
+		</transition>
+	</template>
+	<system>// Template instantiations here
+// Process = Template();
+
+
+ TrainMove_A   =	TrainMove(0) ;
+ OdoError_A  		=	OdoError(0) ;
+ BTM_A   	 		=	BTM(0) ;
+ VBR_A   	 		=	VBR(0) ;
+ VBDynAccGen_A     =  VBDynAccGen(0);
+
+
+// List of processes that compose the system
+//**** Train_A ****
+system TrainMove_A,
+       OdoError_A,
+       BTM_A, 
+       VBR_A,
+      //TrackDescription_A, 
+
+
+// **** global processes ****
+    VBDynAccGen_A,
+    InitAllBalises,
+    Monitor,
+    TimeStep; 
+
+</system>
+	<queries>
+		<query>
+			<formula></formula>
+			<comment></comment>
+		</query>
+	</queries>
+</nta>
