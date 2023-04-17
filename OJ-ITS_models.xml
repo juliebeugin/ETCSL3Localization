@@ -1069,7 +1069,7 @@ nbrB++</label>
 	<template>
 		<name x="5" y="5">VBDynAccGen2</name>
 		<declaration>// ****************************************************************************************************************
-// ********************** IEEE Access analysis: module generated automatically using Python script ****************
+// ********************** IEEE OJ-ITS analysis: module generated automatically using Python script ****************
 
 // All previous modules are manually built using the graphical user interface of UPPAAL. In so doing, UPPAAL '.xml' files are obtained.
 // This manual building allows iteratively refining the models, i.e. correcting syntax errors and approaching the more finely as possible the system behavior.
